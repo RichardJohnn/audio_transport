@@ -158,13 +158,21 @@ std::vector<std::vector<audio_transport::spectral::point>> audio_transport::spec
       p.freq = (2 * M_PI * i * sample_rate)/(double) N_padded;
 
       // Compute how the frequency and time changed
-      std::complex<double> conj_over_norm = std::conj(X)/std::norm(X);
-      double dphase_domega =  std::real(X_t * conj_over_norm);
-      double dphase_dt     = -std::imag(X_d * conj_over_norm);
+      // Guard against division by zero when X is very small (silent bins)
+      double norm_X = std::norm(X);
+      if (norm_X > 1e-20) {
+        std::complex<double> conj_over_norm = std::conj(X)/norm_X;
+        double dphase_domega =  std::real(X_t * conj_over_norm);
+        double dphase_dt     = -std::imag(X_d * conj_over_norm);
 
-      // Compute the reassigned time and frequency
-      p.time_reassigned = p.time + dphase_domega;
-      p.freq_reassigned = p.freq + dphase_dt;
+        // Compute the reassigned time and frequency
+        p.time_reassigned = p.time + dphase_domega;
+        p.freq_reassigned = p.freq + dphase_dt;
+      } else {
+        // For silent/near-silent bins, don't reassign
+        p.time_reassigned = p.time;
+        p.freq_reassigned = p.freq;
+      }
 
       // Add the point
       points[w].push_back(p);

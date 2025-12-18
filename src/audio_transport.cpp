@@ -2,9 +2,13 @@
 #include <vector>
 #include <tuple>
 #include <map>
+#include <iostream>
 
 #include "audio_transport/spectral.hpp"
 #include "audio_transport/audio_transport.hpp"
+
+// Minimum mass threshold to avoid division by zero/near-zero
+static const double MIN_MASS_THRESHOLD = 1e-10;
 
 std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     const std::vector<audio_transport::spectral::point> & left,
@@ -63,10 +67,34 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     // center_phase = std::arg(left[interpolated_bin].value);
 
     // Place the left and right masses
+    // Guard against division by zero/near-zero mass
+    double left_scale = 0;
+    double right_scale = 0;
+
+    if (left_mass.mass > MIN_MASS_THRESHOLD) {
+      left_scale = (1 - interpolation) * std::get<2>(t) / left_mass.mass;
+    } else if (left_mass.mass > 0) {
+      // Very small mass - log warning and clamp scale
+      std::cerr << "[audio_transport] Warning: Very small left_mass.mass = "
+                << left_mass.mass << " at bin " << left_mass.center_bin
+                << ", clamping scale" << std::endl;
+      left_scale = (1 - interpolation);  // Use transport mass directly as scale
+    }
+
+    if (right_mass.mass > MIN_MASS_THRESHOLD) {
+      right_scale = interpolation * std::get<2>(t) / right_mass.mass;
+    } else if (right_mass.mass > 0) {
+      // Very small mass - log warning and clamp scale
+      std::cerr << "[audio_transport] Warning: Very small right_mass.mass = "
+                << right_mass.mass << " at bin " << right_mass.center_bin
+                << ", clamping scale" << std::endl;
+      right_scale = interpolation;  // Use transport mass directly as scale
+    }
+
     place_mass(
-        left_mass, 
-        interpolated_bin, 
-        (1 - interpolation) * std::get<2>(t)/left_mass.mass,
+        left_mass,
+        interpolated_bin,
+        left_scale,
         interpolated_freq,
         center_phase,
         left,
@@ -76,9 +104,9 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
         new_amplitudes
         );
     place_mass(
-        right_mass, 
-        interpolated_bin, 
-        interpolation * std::get<2>(t)/right_mass.mass,
+        right_mass,
+        interpolated_bin,
+        right_scale,
         interpolated_freq,
         center_phase,
         right,
@@ -110,6 +138,27 @@ void audio_transport::place_mass(
     std::vector<double> & phases,
     std::vector<double> & amplitudes) {
 
+  // Validate scale to prevent NaN/Inf propagation
+  if (!std::isfinite(scale) || scale < 0) {
+    std::cerr << "[audio_transport] Warning: Invalid scale = " << scale
+              << " at center_bin = " << center_bin << ", skipping mass placement" << std::endl;
+    return;
+  }
+
+  // Validate interpolated_freq
+  if (!std::isfinite(interpolated_freq)) {
+    std::cerr << "[audio_transport] Warning: Invalid interpolated_freq = " << interpolated_freq
+              << " at center_bin = " << center_bin << ", skipping mass placement" << std::endl;
+    return;
+  }
+
+  // Detect extremely low frequency that would cause crackling (DC-like)
+  if (interpolated_freq < 20.0 && interpolated_freq > -20.0 && scale > 0.01) {
+    std::cerr << "[audio_transport] Warning: Very low interpolated_freq = " << interpolated_freq
+              << " Hz with scale = " << scale << " at center_bin = " << center_bin
+              << " (potential crackling source)" << std::endl;
+  }
+
   // Compute how the phase changes in each bin
   double phase_shift = center_phase - std::arg(input[mass.center_bin].value);
 
@@ -120,9 +169,17 @@ void audio_transport::place_mass(
     if (new_i >= (int) output.size()) continue;
 
     // Rotate the output by the phase offset
-    // plus the frequency 
+    // plus the frequency
     double phase = phase_shift + std::arg(input[i].value);
     double mag = scale * std::abs(input[i].value);
+
+    // Skip if magnitude is invalid
+    if (!std::isfinite(mag)) {
+      std::cerr << "[audio_transport] Warning: Invalid magnitude = " << mag
+                << " at bin " << new_i << ", skipping" << std::endl;
+      continue;
+    }
+
     output[new_i].value += std::polar(mag, phase);
 
     if (mag > amplitudes[new_i]) {
@@ -180,6 +237,19 @@ std::vector<audio_transport::spectral_mass> audio_transport::group_spectrum(
   double mass_sum = 0;
   for (size_t i = 0; i < spectrum.size(); i++) {
     mass_sum += std::abs(spectrum[i].value);
+  }
+
+  // Guard against silent/near-silent spectrum
+  if (mass_sum < MIN_MASS_THRESHOLD) {
+    std::cerr << "[audio_transport] Warning: Near-silent spectrum detected (mass_sum = "
+              << mass_sum << "), returning single mass covering entire spectrum" << std::endl;
+    // Return a single mass covering the entire spectrum with uniform distribution
+    spectral_mass single_mass;
+    single_mass.left_bin = 0;
+    single_mass.center_bin = spectrum.size() / 2;
+    single_mass.right_bin = spectrum.size();
+    single_mass.mass = 1.0;  // Full normalized mass
+    return {single_mass};
   }
 
   // Initialize the first mass
