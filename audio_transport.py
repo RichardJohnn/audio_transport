@@ -260,12 +260,16 @@ class AudioTransport:
         num_bins, num_frames = X.shape
 
         # Sort envelope by percent if provided
-        if k_envelope:
-            k_envelope = sorted(k_envelope, key=lambda x: x["percent"])
+        if k_envelope is not None:
+            # Empty array means full crossfade from source to target
+            if len(k_envelope) == 0:
+                k_envelope = [{"percent": 0, "k": 0.0}, {"percent": 100, "k": 1.0}]
+            else:
+                k_envelope = sorted(k_envelope, key=lambda x: x["percent"])
 
-            # Add default start point if not specified (defaults to k=0)
-            if k_envelope[0]["percent"] > 0:
-                k_envelope.insert(0, {"percent": 0, "k": 0})
+                # Add default start point if not specified (defaults to k=0)
+                if k_envelope[0]["percent"] > 0:
+                    k_envelope.insert(0, {"percent": 0, "k": 0})
 
             print(f"Processing {num_frames} frames with time-varying k...")
             print(f"  Keyframes: {k_envelope}")
@@ -355,12 +359,16 @@ def generate_output_filename(source, target, k, window, hop_div, fft_mult, k_env
     tgt_name = os.path.splitext(os.path.basename(target))[0]
 
     # Format k part of filename
-    if k_envelope:
-        # Sort by percent to get correct start/end
-        sorted_env = sorted(k_envelope, key=lambda x: x["percent"])
-        k_start = sorted_env[0]["k"]
-        k_end = sorted_env[-1]["k"]
-        k_str = f"env{k_start:.1f}-{k_end:.1f}".replace(".", "")
+    if k_envelope is not None:
+        # Empty array means full crossfade
+        if len(k_envelope) == 0:
+            k_str = "env00-10"
+        else:
+            # Sort by percent to get correct start/end
+            sorted_env = sorted(k_envelope, key=lambda x: x["percent"])
+            k_start = sorted_env[0]["k"]
+            k_end = sorted_env[-1]["k"]
+            k_str = f"env{k_start:.1f}-{k_end:.1f}".replace(".", "")
     else:
         # Format k nicely (remove trailing zeros)
         k_str = f"k{k:.2f}".rstrip('0').rstrip('.')
@@ -402,6 +410,7 @@ JSON Parameter File (-f):
   }
 
   k_envelope notes:
+    - Empty array [] = full crossfade [{"percent":0,"k":0},{"percent":100,"k":1}]
     - Array is auto-sorted by percent
     - If no percent:0 entry, defaults to {"percent": 0, "k": 0}
     - If no percent:100 entry, holds last k value until end
@@ -530,7 +539,7 @@ Examples:
             fft_mult=args.fft_mult
         )
 
-        if args.k_envelope:
+        if args.k_envelope is not None:
             print(f"\nProcessing with k_envelope...")
             output = transport.process(audio_X, audio_Y, k_envelope=args.k_envelope)
             filename = "audio_transport_envelope.wav"
@@ -587,7 +596,7 @@ Examples:
         )
 
         start = time.time()
-        if args.k_envelope:
+        if args.k_envelope is not None:
             print(f"\nProcessing with k_envelope...")
             output = transport.process(audio_X, audio_Y, k_envelope=args.k_envelope)
         else:
