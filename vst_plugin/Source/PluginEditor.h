@@ -36,18 +36,20 @@ private:
 
     juce::TextButton bypassButton;
 
+    juce::ComboBox morphModeCombo;
+    juce::Label morphModeLabel;
+
+    juce::Slider dryWetSlider;
+    juce::Label dryWetLabel;
+
+    juce::ComboBox algorithmCombo;
+    juce::Label algorithmLabel;
+
     juce::Label titleLabel;
+    juce::Label versionLabel;
     juce::Label latencyLabel;
 
-    // Parameter attachments
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> windowSizeAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
-
-    // Or manual attachments
-    juce::ParameterAttachment morphParamAttachment;
-    juce::ParameterAttachment windowSizeParamAttachment;
-    juce::ParameterAttachment bypassParamAttachment;
+    // No parameter attachments needed - we handle updates manually
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioTransportEditor)
 };

@@ -4,22 +4,27 @@
 //==============================================================================
 AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
     : AudioProcessorEditor (&p),
-      audioProcessor (p),
-      morphParamAttachment(*p.getMorphParameter(),
-                          [this](float newValue) { morphSlider.setValue(newValue, juce::dontSendNotification); }),
-      windowSizeParamAttachment(*p.getWindowSizeParameter(),
-                               [this](float newValue) { windowSizeSlider.setValue(newValue, juce::dontSendNotification); }),
-      bypassParamAttachment(*p.getBypassParameter(),
-                           [this](float newValue) { bypassButton.setToggleState(newValue > 0.5f, juce::dontSendNotification); })
+      audioProcessor (p)
 {
-    // Set window size
-    setSize (500, 350);
+    // Set window size (taller to accommodate new controls)
+    setSize (500, 490);
 
     // Title
     titleLabel.setText("Audio Transport", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(28.0f, juce::Font::bold));
     titleLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(titleLabel);
+
+    // Version label
+    #ifdef PLUGIN_VERSION_STRING
+        versionLabel.setText("v" PLUGIN_VERSION_STRING, juce::dontSendNotification);
+    #else
+        versionLabel.setText("v1.1.0", juce::dontSendNotification);
+    #endif
+    versionLabel.setFont(juce::Font(11.0f));
+    versionLabel.setJustificationType(juce::Justification::centred);
+    versionLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+    addAndMakeVisible(versionLabel);
 
     // Morph slider
     morphSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
@@ -29,7 +34,9 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
     morphSlider.setPopupDisplayEnabled(true, false, this);
     morphSlider.setTextValueSuffix("");
     morphSlider.onValueChange = [this] {
-        audioProcessor.getMorphParameter()->setValueNotifyingHost(morphSlider.getValue());
+        audioProcessor.getMorphParameter()->setValueNotifyingHost(
+            static_cast<float>(morphSlider.getValue())
+        );
     };
     addAndMakeVisible(morphSlider);
 
@@ -46,7 +53,9 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
     windowSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
     windowSizeSlider.setTextValueSuffix(" ms");
     windowSizeSlider.onValueChange = [this] {
-        audioProcessor.getWindowSizeParameter()->setValueNotifyingHost(windowSizeSlider.getValue());
+        audioProcessor.getWindowSizeParameter()->setValueNotifyingHost(
+            static_cast<float>(windowSizeSlider.getValue())
+        );
     };
     addAndMakeVisible(windowSizeSlider);
 
@@ -63,6 +72,56 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
         audioProcessor.getBypassParameter()->setValueNotifyingHost(bypassButton.getToggleState() ? 1.0f : 0.0f);
     };
     addAndMakeVisible(bypassButton);
+
+    // Morph Mode combo box
+    morphModeCombo.addItem("Full Morph", 1);
+    morphModeCombo.addItem("Dry at Extremes", 2);
+    morphModeCombo.setSelectedItemIndex(p.getMorphModeParameter()->getIndex(), juce::dontSendNotification);
+    morphModeCombo.onChange = [this] {
+        int index = morphModeCombo.getSelectedItemIndex();
+        float normalizedValue = static_cast<float>(index) / static_cast<float>(morphModeCombo.getNumItems() - 1);
+        audioProcessor.getMorphModeParameter()->setValueNotifyingHost(normalizedValue);
+    };
+    addAndMakeVisible(morphModeCombo);
+
+    morphModeLabel.setText("Morph Mode", juce::dontSendNotification);
+    morphModeLabel.setFont(juce::Font(14.0f));
+    morphModeLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(morphModeLabel);
+
+    // Dry/Wet slider
+    dryWetSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    dryWetSlider.setRange(0.0, 100.0, 1.0);
+    dryWetSlider.setValue(p.getDryWetParameter()->get());
+    dryWetSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
+    dryWetSlider.setTextValueSuffix(" %");
+    dryWetSlider.onValueChange = [this] {
+        audioProcessor.getDryWetParameter()->setValueNotifyingHost(
+            static_cast<float>(dryWetSlider.getValue())
+        );
+    };
+    addAndMakeVisible(dryWetSlider);
+
+    dryWetLabel.setText("Dry/Wet", juce::dontSendNotification);
+    dryWetLabel.setFont(juce::Font(14.0f));
+    dryWetLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(dryWetLabel);
+
+    // Algorithm combo box
+    algorithmCombo.addItem("CDF (Fast)", 1);
+    algorithmCombo.addItem("Reassignment (Quality)", 2);
+    algorithmCombo.setSelectedItemIndex(p.getAlgorithmParameter()->getIndex(), juce::dontSendNotification);
+    algorithmCombo.onChange = [this] {
+        int index = algorithmCombo.getSelectedItemIndex();
+        float normalizedValue = static_cast<float>(index) / static_cast<float>(algorithmCombo.getNumItems() - 1);
+        audioProcessor.getAlgorithmParameter()->setValueNotifyingHost(normalizedValue);
+    };
+    addAndMakeVisible(algorithmCombo);
+
+    algorithmLabel.setText("Algorithm", juce::dontSendNotification);
+    algorithmLabel.setFont(juce::Font(14.0f));
+    algorithmLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(algorithmLabel);
 
     // Latency label
     latencyLabel.setFont(juce::Font(12.0f));
@@ -101,9 +160,18 @@ void AudioTransportEditor::paint (juce::Graphics& g)
 
     // Help text
     g.setColour(juce::Colours::grey);
-    g.setFont(11.0f);
-    juce::String helpText = "0.0 = Main Input | 1.0 = Sidechain Input | 0.5 = 50/50 Morph";
-    g.drawText(helpText, getLocalBounds().reduced(10).removeFromBottom(60).removeFromTop(20),
+    g.setFont(10.0f);
+    juce::String helpText = audioProcessor.getMorphModeParameter()->getIndex() == 1 ?
+        "Dry at Extremes: 0.0 = Dry Main | 0.0→0.5 Morph→SC | 0.5 FLIP | 0.5→1.0 SC→Morph | 1.0 = Dry SC" :
+        "Full Morph: Always morphing - 0.0 = Main→SC | 0.5 = 50/50 | 1.0 = SC→Main";
+    g.drawText(helpText, getLocalBounds().reduced(10).removeFromBottom(80).removeFromTop(20),
+               juce::Justification::centred);
+
+    // Algorithm info
+    juce::String algoText = audioProcessor.getAlgorithmParameter()->getIndex() == 0 ?
+        "Algorithm: CDF (Fast)" : "Algorithm: Reassignment (Quality - more CPU)";
+    g.setFont(9.0f);
+    g.drawText(algoText, getLocalBounds().reduced(10).removeFromBottom(60).removeFromTop(15),
                juce::Justification::centred);
 }
 
@@ -112,14 +180,38 @@ void AudioTransportEditor::resized()
     auto bounds = getLocalBounds().reduced(20);
 
     // Title
-    titleLabel.setBounds(bounds.removeFromTop(50));
+    titleLabel.setBounds(bounds.removeFromTop(40));
 
-    bounds.removeFromTop(20); // Spacing
+    // Version
+    versionLabel.setBounds(bounds.removeFromTop(15));
+
+    bounds.removeFromTop(15); // Spacing
 
     // Morph slider (big knob in center)
     auto morphArea = bounds.removeFromTop(180);
     morphLabel.setBounds(morphArea.removeFromTop(20));
     morphSlider.setBounds(morphArea.withSizeKeepingCentre(160, 160));
+
+    bounds.removeFromTop(10); // Spacing
+
+    // Algorithm combo box
+    auto algorithmArea = bounds.removeFromTop(30);
+    algorithmLabel.setBounds(algorithmArea.removeFromLeft(120));
+    algorithmCombo.setBounds(algorithmArea);
+
+    bounds.removeFromTop(10); // Spacing
+
+    // Morph Mode combo box
+    auto morphModeArea = bounds.removeFromTop(30);
+    morphModeLabel.setBounds(morphModeArea.removeFromLeft(120));
+    morphModeCombo.setBounds(morphModeArea);
+
+    bounds.removeFromTop(10); // Spacing
+
+    // Dry/Wet slider
+    auto dryWetArea = bounds.removeFromTop(30);
+    dryWetLabel.setBounds(dryWetArea.removeFromLeft(120));
+    dryWetSlider.setBounds(dryWetArea);
 
     bounds.removeFromTop(10); // Spacing
 
@@ -149,8 +241,37 @@ void AudioTransportEditor::timerCallback()
                                                        latencySamples, latencyMs);
     latencyLabel.setText(latencyText, juce::dontSendNotification);
 
-    // Update sliders from parameters (in case automation changed them)
-    morphSlider.setValue(audioProcessor.getMorphParameter()->get(), juce::dontSendNotification);
-    windowSizeSlider.setValue(audioProcessor.getWindowSizeParameter()->get(), juce::dontSendNotification);
+    // Update controls from parameters (in case automation changed them)
+    // Only update if not currently being edited by user
+    if (!morphSlider.isMouseButtonDown() && !morphSlider.isMouseOverOrDragging())
+    {
+        float paramValue = audioProcessor.getMorphParameter()->get();
+        if (std::abs(morphSlider.getValue() - paramValue) > 0.001)
+            morphSlider.setValue(paramValue, juce::dontSendNotification);
+    }
+
+    if (!windowSizeSlider.isMouseButtonDown() && !windowSizeSlider.isMouseOverOrDragging())
+    {
+        float paramValue = audioProcessor.getWindowSizeParameter()->get();
+        if (std::abs(windowSizeSlider.getValue() - paramValue) > 0.5)
+            windowSizeSlider.setValue(paramValue, juce::dontSendNotification);
+    }
+
+    if (!dryWetSlider.isMouseButtonDown() && !dryWetSlider.isMouseOverOrDragging())
+    {
+        float paramValue = audioProcessor.getDryWetParameter()->get();
+        if (std::abs(dryWetSlider.getValue() - paramValue) > 0.5)
+            dryWetSlider.setValue(paramValue, juce::dontSendNotification);
+    }
+
+    // These don't need mouse checks
     bypassButton.setToggleState(audioProcessor.getBypassParameter()->get(), juce::dontSendNotification);
+
+    int modeIndex = audioProcessor.getMorphModeParameter()->getIndex();
+    if (morphModeCombo.getSelectedItemIndex() != modeIndex)
+        morphModeCombo.setSelectedItemIndex(modeIndex, juce::dontSendNotification);
+
+    int algoIndex = audioProcessor.getAlgorithmParameter()->getIndex();
+    if (algorithmCombo.getSelectedItemIndex() != algoIndex)
+        algorithmCombo.setSelectedItemIndex(algoIndex, juce::dontSendNotification);
 }

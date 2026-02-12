@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <audio_transport/RealtimeAudioTransport.hpp>
+#include <audio_transport/RealtimeReassignmentTransport.hpp>
 #include <memory>
 
 //==============================================================================
@@ -57,14 +58,16 @@ public:
     juce::AudioParameterBool* getBypassParameter() const { return bypassParam; }
     juce::AudioParameterChoice* getMorphModeParameter() const { return morphModeParam; }
     juce::AudioParameterFloat* getDryWetParameter() const { return dryWetParam; }
+    juce::AudioParameterChoice* getAlgorithmParameter() const { return algorithmParam; }
 
     // Latency reporting
     int getLatencySamples() const;
 
 private:
     //==============================================================================
-    // Audio Transport processor
-    std::unique_ptr<audio_transport::RealtimeAudioTransport> transportProcessor;
+    // Audio Transport processors (CDF-based and Reassignment-based)
+    std::unique_ptr<audio_transport::RealtimeAudioTransport> cdfProcessor;
+    std::unique_ptr<audio_transport::RealtimeReassignmentTransport> reassignmentProcessor;
 
     // Parameters
     juce::AudioParameterFloat* morphParam;
@@ -72,13 +75,21 @@ private:
     juce::AudioParameterBool* bypassParam;
     juce::AudioParameterChoice* morphModeParam;
     juce::AudioParameterFloat* dryWetParam;
+    juce::AudioParameterChoice* algorithmParam;
 
     // State
     double currentSampleRate = 44100.0;
     bool needsProcessorRebuild = false;
 
+    // Delay buffers for latency compensation of dry signals
+    std::vector<float> mainDelayBuffer;
+    std::vector<float> sidechainDelayBuffer;
+    int delayBufferWritePos = 0;
+    int delayBufferSize = 0;
+
     // Helper methods
     void rebuildProcessor();
+    void updateDelayBuffers();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioTransportProcessor)
 };
