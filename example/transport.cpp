@@ -11,6 +11,8 @@ unsigned int padding = 7; // multiplies window size
 
 int main(int argc, char ** argv) {
 
+  std::cout << "transport version: RichardJohnn-fork-v1.6-debug" << std::endl;
+
   if (argc != 6) {
     std::cout <<
       "Usage: " << argv[0] << " left_file right_file start_percent end_percent output_file"
@@ -32,8 +34,10 @@ int main(int argc, char ** argv) {
 
   if (sample_rate_left != sample_rate_right) {
     std::cout << "Sample rates are different! " << sample_rate_left << " != " << sample_rate_right << std::endl;
+    std::cout << "Using correct sample rate for each file's spectral analysis." << std::endl;
   }
-  double sample_rate = sample_rate_left;
+  // Use left sample rate for output
+  double sample_rate_output = sample_rate_left;
 
   // Initialize the output audio
   size_t num_channels = std::min(audio_left.size(), audio_right.size());
@@ -46,10 +50,10 @@ int main(int argc, char ** argv) {
 
     std::cout << "Converting left input to the spectral domain" << std::endl;
     std::vector<std::vector<audio_transport::spectral::point>> points_left =
-      audio_transport::spectral::analysis(audio_left[c], sample_rate, window_size, padding);
+      audio_transport::spectral::analysis(audio_left[c], sample_rate_left, window_size, padding);
     std::cout << "Converting right input to the spectral domain" << std::endl;
     std::vector<std::vector<audio_transport::spectral::point>> points_right =
-      audio_transport::spectral::analysis(audio_right[c], sample_rate, window_size, padding);
+      audio_transport::spectral::analysis(audio_right[c], sample_rate_right, window_size, padding);
 
     std::cout << "Applying equal loudness filters" << std::endl;
     audio_transport::equal_loudness::apply(points_left);
@@ -66,13 +70,40 @@ int main(int argc, char ** argv) {
       interpolation_factor = (interpolation_factor - start_fraction)/(end_fraction - start_fraction);
       interpolation_factor = std::min(1.,std::max(0.,interpolation_factor));
 
-      points_interpolated[w] = 
+      // Compute input spectral energy for this window
+      double left_energy = 0, right_energy = 0;
+      for (size_t i = 0; i < points_left[w].size(); i++) {
+        left_energy += std::abs(points_left[w][i].value);
+      }
+      for (size_t i = 0; i < points_right[w].size(); i++) {
+        right_energy += std::abs(points_right[w][i].value);
+      }
+      double max_input_energy = std::max(left_energy, right_energy);
+
+      points_interpolated[w] =
         audio_transport::interpolate(
           points_left[w],
           points_right[w],
           phases,
           window_size,
           interpolation_factor);
+
+      // Compute output spectral energy
+      double output_energy = 0;
+      for (size_t i = 0; i < points_interpolated[w].size(); i++) {
+        output_energy += std::abs(points_interpolated[w][i].value);
+      }
+
+      // Log if output energy significantly exceeds input
+      double ratio = (max_input_energy > 0) ? output_energy / max_input_energy : 0;
+      if (ratio > 2.0) {
+        double time_sec = w * window_size / 2.0;  // approximate time
+        std::cout << "BLOWUP: window " << w << " (t=" << time_sec << "s) "
+                  << "ratio=" << ratio << " "
+                  << "left_e=" << left_energy << " right_e=" << right_energy
+                  << " out_e=" << output_energy
+                  << " interp=" << interpolation_factor << std::endl;
+      }
     }
 
     std::cout << "Removing equal loudness filters" << std::endl;
@@ -85,5 +116,5 @@ int main(int argc, char ** argv) {
 
   // Write the file
   std::cout << "Writing to file " << argv[5] << std::endl;
-  audiorw::write(audio_interpolated, argv[5], sample_rate);
+  audiorw::write(audio_interpolated, argv[5], sample_rate_output);
 }

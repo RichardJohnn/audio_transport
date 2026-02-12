@@ -1,0 +1,8 @@
+{
+  "source": "/Users/rich/Desktop/pad.wav",
+  "target": "/Users/rich/Desktop/wewww.wav",
+  "k": 0.5,
+  "window": 200,
+  "hop_div": 8,
+  "fft_mult": 32
+}

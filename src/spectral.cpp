@@ -52,6 +52,11 @@ std::vector<double> audio_transport::spectral::synthesis(
       // Scale down to correct for FFT and overlap sizes
       double value = window_padded[i + padding_samples]/(overlap * window_padded.size());
 
+      // Safety check: clamp NaN/Inf values to prevent audio corruption
+      if (!std::isfinite(value)) {
+        value = 0;
+      }
+
       // Add it to the overlapped signal
       audio[i + w * window_size/(2 * overlap)] += value;
     }

@@ -1,0 +1,11 @@
+{
+  "source": "/Users/rich/Desktop/heyheyhey.wav",
+  "target": "/Users/rich/Desktop/synth.wav",
+  "k_envelope": [
+     {"percent": 60, "k": 0},
+     {"percent": 80, "k": 0.75}
+  ],
+  "window": 400,
+  "hop_div": 8,
+  "fft_mult": 128
+}

@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.4)
+cmake_minimum_required (VERSION 3.5)
 
 project(audio_transport)
 
@@ -65,5 +65,26 @@ if (BUILD_EXAMPLES)
       get_filename_component(_example_name ${_example_file} NAME_WE)
       add_executable(${_example_name} ${_example_file})
       target_link_libraries(${_example_name} ${LIBS})
+  endforeach()
+endif()
+
+#####################################
+## Unit Tests (no external deps)
+#####################################
+
+option(BUILD_TESTS "BUILD_TESTS" OFF)
+if (BUILD_TESTS)
+  # Build tests that don't require audiorw
+  add_executable(test_realtime_transport test/test_realtime_transport.cpp)
+  target_link_libraries(test_realtime_transport ${PROJECT_NAME} ${FFTW_LIBRARIES})
+
+  # Add other standalone tests
+  file(GLOB TEST_SOURCES test/test_*.cpp)
+  foreach(_test_file ${TEST_SOURCES})
+      get_filename_component(_test_name ${_test_file} NAME_WE)
+      if(NOT _test_name STREQUAL "test_realtime_transport")
+          add_executable(${_test_name} ${_test_file})
+          target_link_libraries(${_test_name} ${PROJECT_NAME} ${FFTW_LIBRARIES})
+      endif()
   endforeach()
 endif()

@@ -17,6 +17,64 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     double window_size,
     double interpolation) {
 
+  // Check for silent inputs - if one side is silent, just scale the other
+  double left_mass_sum = 0, right_mass_sum = 0;
+  for (size_t i = 0; i < left.size(); i++) {
+    left_mass_sum += std::abs(left[i].value);
+  }
+  for (size_t i = 0; i < right.size(); i++) {
+    right_mass_sum += std::abs(right[i].value);
+  }
+
+  bool left_silent = (left_mass_sum < MIN_MASS_THRESHOLD);
+  bool right_silent = (right_mass_sum < MIN_MASS_THRESHOLD);
+
+  // Handle silent inputs by simple scaling instead of transport
+  if (left_silent && right_silent) {
+    // Both silent - return silence
+    std::vector<audio_transport::spectral::point> output(left.size());
+    for (size_t i = 0; i < left.size(); i++) {
+      output[i].freq = left[i].freq;
+      output[i].value = 0;
+    }
+    return output;
+  }
+
+  if (left_silent) {
+    // Left is silent - just scale right by interpolation factor
+    std::vector<audio_transport::spectral::point> output(right.size());
+    for (size_t i = 0; i < right.size(); i++) {
+      output[i] = right[i];
+      output[i].value *= interpolation;
+    }
+    // Update phases from right side
+    for (size_t i = 0; i < phases.size() && i < right.size(); i++) {
+      double mag = std::abs(right[i].value);
+      if (mag > 0) {
+        phases[i] = std::arg(right[i].value) + right[i].freq_reassigned * window_size / 2.0;
+      }
+    }
+    return output;
+  }
+
+  if (right_silent) {
+    // Right is silent - just scale left by (1 - interpolation factor)
+    std::vector<audio_transport::spectral::point> output(left.size());
+    for (size_t i = 0; i < left.size(); i++) {
+      output[i] = left[i];
+      output[i].value *= (1 - interpolation);
+    }
+    // Update phases from left side
+    for (size_t i = 0; i < phases.size() && i < left.size(); i++) {
+      double mag = std::abs(left[i].value);
+      if (mag > 0) {
+        phases[i] = std::arg(left[i].value) + left[i].freq_reassigned * window_size / 2.0;
+      }
+    }
+    return output;
+  }
+
+  // Both sides have content - proceed with normal transport
   // Group the left and right spectra
   std::vector<spectral_mass> left_masses = group_spectrum(left);
   std::vector<spectral_mass> right_masses = group_spectrum(right);
@@ -58,9 +116,16 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
       (1 - interpolation_rounded) * left[left_mass.center_bin].freq_reassigned +
       interpolation_rounded * right[right_mass.center_bin].freq_reassigned;
 
+    // Validate phases input to prevent NaN propagation from previous windows
+    if (!std::isfinite(phases[interpolated_bin])) {
+      std::cerr << "[audio_transport] Warning: Invalid phase at bin " << interpolated_bin
+                << ", resetting to 0" << std::endl;
+      phases[interpolated_bin] = 0;
+    }
+
     double center_phase =
       phases[interpolated_bin] + (interpolated_freq * window_size/2.)/2. - (M_PI * interpolated_bin);
-    double new_phase = 
+    double new_phase =
       center_phase + (interpolated_freq * window_size/2.)/2. + (M_PI * interpolated_bin);
 
     // Uncomment this for HORIZONTAL INCOHERENCE
@@ -152,15 +217,31 @@ void audio_transport::place_mass(
     return;
   }
 
-  // Detect extremely low frequency that would cause crackling (DC-like)
-  if (interpolated_freq < 20.0 && interpolated_freq > -20.0 && scale > 0.01) {
-    std::cerr << "[audio_transport] Warning: Very low interpolated_freq = " << interpolated_freq
-              << " Hz with scale = " << scale << " at center_bin = " << center_bin
-              << " (potential crackling source)" << std::endl;
+  // Attenuate very low frequencies to prevent crackling
+  // Use a smooth ramp: 0 at DC, full scale at LOW_FREQ_CUTOFF Hz
+  const double LOW_FREQ_CUTOFF = 30.0;  // Hz - frequencies below this get attenuated
+  double abs_freq = std::abs(interpolated_freq);
+  if (abs_freq < LOW_FREQ_CUTOFF) {
+    double attenuation = abs_freq / LOW_FREQ_CUTOFF;  // Linear ramp from 0 to 1
+    attenuation = attenuation * attenuation;  // Squared for smoother rolloff
+    scale *= attenuation;
+
+    // Only log if we're significantly attenuating (to reduce spam)
+    if (attenuation < 0.5 && scale > 0.001) {
+      std::cerr << "[audio_transport] Attenuating low freq: " << interpolated_freq
+                << " Hz, attenuation = " << attenuation << std::endl;
+    }
   }
 
   // Compute how the phase changes in each bin
   double phase_shift = center_phase - std::arg(input[mass.center_bin].value);
+
+  // Validate phase_shift to prevent NaN propagation
+  if (!std::isfinite(phase_shift)) {
+    std::cerr << "[audio_transport] Warning: Invalid phase_shift = " << phase_shift
+              << " at center_bin = " << center_bin << ", skipping mass placement" << std::endl;
+    return;
+  }
 
   for (size_t i = mass.left_bin; i < mass.right_bin; i++) {
     // Compute the location in the new array
@@ -180,11 +261,24 @@ void audio_transport::place_mass(
       continue;
     }
 
+    // Skip if phase is invalid
+    if (!std::isfinite(phase)) {
+      std::cerr << "[audio_transport] Warning: Invalid phase = " << phase
+                << " at bin " << new_i << ", skipping" << std::endl;
+      continue;
+    }
+
     output[new_i].value += std::polar(mag, phase);
 
     if (mag > amplitudes[new_i]) {
       amplitudes[new_i] = mag;
-      phases[new_i] = next_phase;
+      // Validate next_phase before storing to prevent NaN propagation
+      if (std::isfinite(next_phase)) {
+        phases[new_i] = next_phase;
+      } else {
+        std::cerr << "[audio_transport] Warning: Invalid next_phase = " << next_phase
+                  << " at bin " << new_i << ", keeping previous phase" << std::endl;
+      }
       output[new_i].freq_reassigned = interpolated_freq;
     }
   }
