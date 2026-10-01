@@ -117,7 +117,7 @@ For a hop other than half the window, pass a `spectral::stft_params` to `analysi
 - Seed the phases with `initial_phases(first_spectrum, hop_seconds)` rather than zeros; zeros line every partial up in the first window and synthesize a click.
 - `spectral::analyzer` / `spectral::synthesizer` process one window at a time with FFTW plans created once. Planning isn't thread-safe: construct them on one thread, then use separate instances concurrently (`transport -f` runs one per channel).
 - `equal_loudness` holds the A-weighting curve flat below 20 Hz; otherwise `remove()` multiplies near-DC bins by up to ~1e15 at fine FFT resolutions.
-- FFTW uses `FFTW_MEASURE`, so output can differ in the last bits between runs. Compile with `-DAUDIO_TRANSPORT_FFTW_FLAGS=FFTW_ESTIMATE` for reproducible output.
+- `spectral.cpp` plans with `FFTW_ESTIMATE` (instant, reproducible). `cmake -D FFTW_MEASURE=ON` switches to `FFTW_MEASURE`, whose planning (~15 s for a 1M-point FFT) outweighs its faster transforms in a single render, and whose output can differ in the last bits between runs. The realtime classes keep `FFTW_MEASURE` since they reuse plans for the life of a stream.
 
 ## Tests
 

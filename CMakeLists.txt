@@ -22,6 +22,14 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/modules/)
 include_directories(include)
 file(GLOB PROJECT_SOURCES src/*.cpp)
 
+# Offline analysis/synthesis plan FFTs with FFTW_ESTIMATE by default:
+# FFTW_MEASURE's planning time outweighs its faster transforms for a
+# single render
+option(FFTW_MEASURE "Plan analysis/synthesis FFTs with FFTW_MEASURE" OFF)
+if (FFTW_MEASURE)
+  add_definitions(-DAUDIO_TRANSPORT_FFTW_FLAGS=FFTW_MEASURE)
+endif()
+
 #######################
 ## External Libraries
 #######################

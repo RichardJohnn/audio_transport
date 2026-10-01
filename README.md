@@ -151,4 +151,4 @@ The STFT geometry can be set with ```spectral::stft_params```, either ```stft_pa
 
 To process a window at a time (for long inputs, very large FFTs or live use), ```spectral::analyzer``` and ```spectral::synthesizer``` create their FFTW plans once and handle one window per call; overlap-add each synthesized window ```p.hop``` samples apart. FFTW planning isn't thread-safe, so construct them on one thread; separate instances can then run concurrently.
 
-FFTW plans are chosen with ```FFTW_MEASURE```, so results can differ in the last bits between runs. Compile the library with ```-DAUDIO_TRANSPORT_FFTW_FLAGS=FFTW_ESTIMATE``` for reproducible output.
+```analysis```, ```synthesis```, ```analyzer``` and ```synthesizer``` plan their FFTs with ```FFTW_ESTIMATE```, which is instant and gives identical output on every run. ```FFTW_MEASURE``` instead times candidate plans on your machine and keeps the fastest. That only pays off when a plan is reused for far more transforms than one render does: planning a 1M-point FFT took about 15 s, longer than the render itself, and the output was bit-identical. To use it anyway, configure with ```cmake .. -D FFTW_MEASURE=ON```.

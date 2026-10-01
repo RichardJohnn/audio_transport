@@ -12,11 +12,14 @@
 
 using namespace audio_transport;
 
-// FFTW_MEASURE times candidate plans and keeps the fastest, so output can
-// differ in the last bits between runs. Define this as FFTW_ESTIMATE for
-// reproducible output.
+// FFTW planner flags. FFTW_ESTIMATE plans instantly and is reproducible.
+// FFTW_MEASURE times candidate plans on this machine and keeps the
+// fastest, which only pays off when plans are reused for many more
+// transforms than one offline render does: planning a 1M-point FFT takes
+// ~15 s, longer than the whole render. MEASURE output can also differ in
+// the last bits between runs. Build with -D FFTW_MEASURE=ON to use it.
 #ifndef AUDIO_TRANSPORT_FFTW_FLAGS
-#define AUDIO_TRANSPORT_FFTW_FLAGS FFTW_MEASURE
+#define AUDIO_TRANSPORT_FFTW_FLAGS FFTW_ESTIMATE
 #endif
 
 spectral::stft_params audio_transport::spectral::stft_params::legacy(
