@@ -57,7 +57,12 @@ if (BUILD_EXAMPLES)
   # Find audiorw
   find_package(AUDIORW REQUIRED)
   include_directories(${AUDIORW_INCLUDE})
+  include_directories(example/third_party)
   set(LIBS ${LIBS} ${AUDIORW_LIBRARY})
+
+  # transport -f processes channels in parallel
+  find_package(Threads REQUIRED)
+  set(LIBS ${LIBS} Threads::Threads)
 
   # from list of files we'll create examples example_name.cpp -> example_name
   file(GLOB EXAMPLE_SOURCES example/*.cpp)
@@ -75,6 +80,8 @@ endif()
 option(BUILD_TESTS "BUILD_TESTS" OFF)
 if (BUILD_TESTS)
   # Build tests that don't require audiorw
+  # transport_params.hpp and its vendored JSON parser live with the examples
+  include_directories(example example/third_party)
   add_executable(test_realtime_transport test/test_realtime_transport.cpp)
   target_link_libraries(test_realtime_transport ${PROJECT_NAME} ${FFTW_LIBRARIES})
 

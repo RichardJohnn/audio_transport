@@ -82,6 +82,14 @@ The library operates on audio in three stages:
 # 70-100%: guitar only
 ```
 
+**Transport with a parameter file** (same JSON keys as `audio_transport.py -f`):
+```bash
+./transport -f params.json
+# keys: source, target, k, k_envelope, window (ms), hop_div, fft_mult, output
+# defaults: k 0.5, window 50, hop_div 2, fft_mult 4; output auto-named like the Python script
+```
+Uses `stft_params::from_python()` (hop = N/hop_div, fft = nextpow2(N)·fft_mult) and `interpolate_hop()`, processing one window at a time so large FFTs fit in memory. Running `./transport` with no arguments prints the schema.
+
 **Glide effect** (feedback-based portamento):
 ```bash
 ./glide piano.wav 1 piano_glide.ogg
@@ -103,3 +111,17 @@ Typical workflow:
 5. Call `spectral::synthesis()` to reconstruct audio
 
 Phase coherence requires maintaining a `std::vector<double> phases` buffer across windows.
+
+For a hop other than half the window, pass a `spectral::stft_params` to `analysis()`/`synthesis()` and call `interpolate_hop()` with the hop in seconds. The older `window_size`/`padding`/`overlap` overloads and `interpolate()` assume hop = window/2 and are kept for compatibility.
+
+- Seed the phases with `initial_phases(first_spectrum, hop_seconds)` rather than zeros; zeros line every partial up in the first window and synthesize a click.
+- `spectral::analyzer` / `spectral::synthesizer` process one window at a time with FFTW plans created once. Planning isn't thread-safe: construct them on one thread, then use separate instances concurrently (`transport -f` runs one per channel).
+- `equal_loudness` holds the A-weighting curve flat below 20 Hz; otherwise `remove()` multiplies near-DC bins by up to ~1e15 at fine FFT resolutions.
+- FFTW uses `FFTW_MEASURE`, so output can differ in the last bits between runs. Compile with `-DAUDIO_TRANSPORT_FFTW_FLAGS=FFTW_ESTIMATE` for reproducible output.
+
+## Tests
+
+```bash
+cmake .. -D BUILD_TESTS=ON && make && ./test_stft_params && ./test_transport_params && ./test_equal_loudness
+```
+On macOS with Homebrew, configure as `rebuild.sh` does (`-DCMAKE_PREFIX_PATH="$(brew --prefix fftw);/usr/local"`) so the examples pick up the ffmpeg@4 headers audiorw needs.

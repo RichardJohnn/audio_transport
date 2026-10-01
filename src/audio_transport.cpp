@@ -10,20 +10,65 @@
 // Minimum mass threshold to avoid division by zero/near-zero
 static const double MIN_MASS_THRESHOLD = 1e-10;
 
+using audio_transport::spectral_mass;
+
+// |value| and arg(value) of every bin, computed once per spectrum rather
+// than each time a bin is summed or placed
+static std::vector<double> magnitudes(const std::vector<audio_transport::spectral::point> & spectrum) {
+  std::vector<double> m(spectrum.size());
+  for (size_t i = 0; i < spectrum.size(); i++) m[i] = std::abs(spectrum[i].value);
+  return m;
+}
+
+static std::vector<double> arguments(const std::vector<audio_transport::spectral::point> & spectrum) {
+  std::vector<double> a(spectrum.size());
+  for (size_t i = 0; i < spectrum.size(); i++) a[i] = std::arg(spectrum[i].value);
+  return a;
+}
+
+static std::vector<audio_transport::spectral_mass> group_spectrum(
+    const std::vector<audio_transport::spectral::point> & spectrum,
+    const std::vector<double> & magnitude);
+
 std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     const std::vector<audio_transport::spectral::point> & left,
     const std::vector<audio_transport::spectral::point> & right,
     std::vector<double> & phases,
     double window_size,
     double interpolation) {
+  return interpolate_hop(left, right, phases, window_size/2., interpolation);
+}
+
+std::vector<double> audio_transport::initial_phases(
+    const std::vector<audio_transport::spectral::point> & spectrum,
+    double hop_seconds) {
+  // interpolate_hop() places a mass centered on bin b with phase
+  // phases[b] + freq * hop/2 - pi * b, so invert that for the input phase
+  std::vector<double> phases(spectrum.size(), 0);
+  for (size_t i = 0; i < spectrum.size(); i++) {
+    if (std::abs(spectrum[i].value) > 0) {
+      phases[i] = std::arg(spectrum[i].value) - (spectrum[i].freq_reassigned * hop_seconds)/2. + M_PI * i;
+    }
+  }
+  return phases;
+}
+
+std::vector<audio_transport::spectral::point> audio_transport::interpolate_hop(
+    const std::vector<audio_transport::spectral::point> & left,
+    const std::vector<audio_transport::spectral::point> & right,
+    std::vector<double> & phases,
+    double hop_seconds,
+    double interpolation) {
 
   // Check for silent inputs - if one side is silent, just scale the other
+  std::vector<double> left_magnitude = magnitudes(left);
+  std::vector<double> right_magnitude = magnitudes(right);
   double left_mass_sum = 0, right_mass_sum = 0;
   for (size_t i = 0; i < left.size(); i++) {
-    left_mass_sum += std::abs(left[i].value);
+    left_mass_sum += left_magnitude[i];
   }
   for (size_t i = 0; i < right.size(); i++) {
-    right_mass_sum += std::abs(right[i].value);
+    right_mass_sum += right_magnitude[i];
   }
 
   bool left_silent = (left_mass_sum < MIN_MASS_THRESHOLD);
@@ -49,9 +94,9 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     }
     // Update phases from right side
     for (size_t i = 0; i < phases.size() && i < right.size(); i++) {
-      double mag = std::abs(right[i].value);
+      double mag = right_magnitude[i];
       if (mag > 0) {
-        phases[i] = std::arg(right[i].value) + right[i].freq_reassigned * window_size / 2.0;
+        phases[i] = std::arg(right[i].value) + right[i].freq_reassigned * hop_seconds;
       }
     }
     return output;
@@ -66,9 +111,9 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     }
     // Update phases from left side
     for (size_t i = 0; i < phases.size() && i < left.size(); i++) {
-      double mag = std::abs(left[i].value);
+      double mag = left_magnitude[i];
       if (mag > 0) {
-        phases[i] = std::arg(left[i].value) + left[i].freq_reassigned * window_size / 2.0;
+        phases[i] = std::arg(left[i].value) + left[i].freq_reassigned * hop_seconds;
       }
     }
     return output;
@@ -76,8 +121,10 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
 
   // Both sides have content - proceed with normal transport
   // Group the left and right spectra
-  std::vector<spectral_mass> left_masses = group_spectrum(left);
-  std::vector<spectral_mass> right_masses = group_spectrum(right);
+  std::vector<spectral_mass> left_masses = ::group_spectrum(left, left_magnitude);
+  std::vector<spectral_mass> right_masses = ::group_spectrum(right, right_magnitude);
+  std::vector<double> left_phase = arguments(left);
+  std::vector<double> right_phase = arguments(right);
 
   // Get the transport matrix
   std::vector<std::tuple<size_t, size_t, double>> T =
@@ -124,9 +171,9 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
     }
 
     double center_phase =
-      phases[interpolated_bin] + (interpolated_freq * window_size/2.)/2. - (M_PI * interpolated_bin);
+      phases[interpolated_bin] + (interpolated_freq * hop_seconds)/2. - (M_PI * interpolated_bin);
     double new_phase =
-      center_phase + (interpolated_freq * window_size/2.)/2. + (M_PI * interpolated_bin);
+      center_phase + (interpolated_freq * hop_seconds)/2. + (M_PI * interpolated_bin);
 
     // Uncomment this for HORIZONTAL INCOHERENCE
     // center_phase = std::arg(left[interpolated_bin].value);
@@ -162,7 +209,8 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
         left_scale,
         interpolated_freq,
         center_phase,
-        left,
+        left_magnitude,
+        left_phase,
         interpolated,
         new_phase,
         new_phases,
@@ -174,7 +222,8 @@ std::vector<audio_transport::spectral::point> audio_transport::interpolate(
         right_scale,
         interpolated_freq,
         center_phase,
-        right,
+        right_magnitude,
+        right_phase,
         interpolated,
         new_phase,
         new_phases,
@@ -197,7 +246,8 @@ void audio_transport::place_mass(
     double scale,
     double interpolated_freq,
     double center_phase,
-    const std::vector<audio_transport::spectral::point> & input,
+    const std::vector<double> & magnitude,
+    const std::vector<double> & phase,
     std::vector<audio_transport::spectral::point> & output,
     double next_phase,
     std::vector<double> & phases,
@@ -234,7 +284,7 @@ void audio_transport::place_mass(
   }
 
   // Compute how the phase changes in each bin
-  double phase_shift = center_phase - std::arg(input[mass.center_bin].value);
+  double phase_shift = center_phase - phase[mass.center_bin];
 
   // Validate phase_shift to prevent NaN propagation
   if (!std::isfinite(phase_shift)) {
@@ -251,8 +301,8 @@ void audio_transport::place_mass(
 
     // Rotate the output by the phase offset
     // plus the frequency
-    double phase = phase_shift + std::arg(input[i].value);
-    double mag = scale * std::abs(input[i].value);
+    double bin_phase = phase_shift + phase[i];
+    double mag = scale * magnitude[i];
 
     // Skip if magnitude is invalid
     if (!std::isfinite(mag)) {
@@ -262,13 +312,13 @@ void audio_transport::place_mass(
     }
 
     // Skip if phase is invalid
-    if (!std::isfinite(phase)) {
-      std::cerr << "[audio_transport] Warning: Invalid phase = " << phase
+    if (!std::isfinite(bin_phase)) {
+      std::cerr << "[audio_transport] Warning: Invalid phase = " << bin_phase
                 << " at bin " << new_i << ", skipping" << std::endl;
       continue;
     }
 
-    output[new_i].value += std::polar(mag, phase);
+    output[new_i].value += std::polar(mag, bin_phase);
 
     if (mag > amplitudes[new_i]) {
       amplitudes[new_i] = mag;
@@ -326,11 +376,17 @@ std::vector<std::tuple<size_t, size_t, double>> audio_transport::transport_matri
 std::vector<audio_transport::spectral_mass> audio_transport::group_spectrum(
    const std::vector<audio_transport::spectral::point> & spectrum
    ) {
+  return ::group_spectrum(spectrum, magnitudes(spectrum));
+}
+
+static std::vector<audio_transport::spectral_mass> group_spectrum(
+    const std::vector<audio_transport::spectral::point> & spectrum,
+    const std::vector<double> & magnitude) {
 
   // Keep track of the total mass
   double mass_sum = 0;
   for (size_t i = 0; i < spectrum.size(); i++) {
-    mass_sum += std::abs(spectrum[i].value);
+    mass_sum += magnitude[i];
   }
 
   // Guard against silent/near-silent spectrum
@@ -392,7 +448,7 @@ std::vector<audio_transport::spectral_mass> audio_transport::group_spectrum(
       // Compute the actual mass
       masses[masses.size() - 1].mass = 0;
       for (size_t j = masses[masses.size() - 1].left_bin; j < i; j++) {
-        masses[masses.size() - 1].mass += std::abs(spectrum[j].value);
+        masses[masses.size() - 1].mass += magnitude[j];
       }
 
       if (masses[masses.size() - 1].mass > 0) {
@@ -416,7 +472,7 @@ std::vector<audio_transport::spectral_mass> audio_transport::group_spectrum(
   masses[masses.size() - 1].right_bin = spectrum.size();
   masses[masses.size() - 1].mass = 0;
   for (size_t j = masses[masses.size() - 1].left_bin; j < spectrum.size(); j++) {
-    masses[masses.size() - 1].mass += std::abs(spectrum[j].value);
+    masses[masses.size() - 1].mass += magnitude[j];
   }
   masses[masses.size() - 1].mass /= mass_sum;
 

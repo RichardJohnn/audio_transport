@@ -8,9 +8,22 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <audiorw/audiorw.hpp>
+#include <algorithm>
+#include <audiorw.hpp>
 
 #include "audio_transport/RealtimeAudioTransport.hpp"
+
+// Read a file and mix its channels down to mono
+std::vector<float> read_mono(const std::string& filename, double& sample_rate) {
+    std::vector<std::vector<double>> channels = audiorw::read(filename, sample_rate);
+    std::vector<float> mono(channels.empty() ? 0 : channels[0].size(), 0.0f);
+    for (const std::vector<double>& channel : channels) {
+        for (size_t i = 0; i < mono.size() && i < channel.size(); ++i) {
+            mono[i] += static_cast<float>(channel[i] / channels.size());
+        }
+    }
+    return mono;
+}
 
 void create_test_tone(std::vector<float>& buffer, double frequency,
                       double sample_rate, double duration) {
@@ -62,20 +75,16 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "Loading main input: " << argv[1] << std::endl;
-        audiorw::AudioFile main_file(argv[1]);
-        sample_rate = main_file.sample_rate();
-        main_audio.resize(main_file.num_samples());
-        main_file.read_samples(main_audio.data(), main_file.num_samples());
+        main_audio = read_mono(argv[1], sample_rate);
 
         std::cout << "Loading sidechain input: " << argv[2] << std::endl;
-        audiorw::AudioFile sidechain_file(argv[2]);
-        if (sidechain_file.sample_rate() != sample_rate) {
+        double sidechain_sample_rate;
+        sidechain_audio = read_mono(argv[2], sidechain_sample_rate);
+        if (sidechain_sample_rate != sample_rate) {
             std::cerr << "Warning: Sample rate mismatch!" << std::endl;
             std::cerr << "  Main: " << sample_rate << " Hz" << std::endl;
-            std::cerr << "  Sidechain: " << sidechain_file.sample_rate() << " Hz" << std::endl;
+            std::cerr << "  Sidechain: " << sidechain_sample_rate << " Hz" << std::endl;
         }
-        sidechain_audio.resize(sidechain_file.num_samples());
-        sidechain_file.read_samples(sidechain_audio.data(), sidechain_file.num_samples());
 
         // Ensure equal length
         size_t max_len = std::max(main_audio.size(), sidechain_audio.size());
@@ -142,13 +151,8 @@ int main(int argc, char** argv) {
 
     // Write output
     std::cout << "\nWriting output: " << output_file << std::endl;
-    audiorw::AudioFile output_audio_file(
-        output_file,
-        audiorw::AudioFile::WRITE,
-        1,  // mono
-        sample_rate
-    );
-    output_audio_file.write_samples(output.data(), output.size());
+    std::vector<std::vector<double>> output_audio(1, std::vector<double>(output.begin(), output.end()));
+    audiorw::write(output_audio, output_file, sample_rate);
 
     std::cout << "Done! Output written to " << output_file << std::endl;
     std::cout << "\nLatency: " << processor.getLatencySamples() << " samples ("
