@@ -26,10 +26,17 @@ else()
     pkg_check_modules(FFTW3 REQUIRED fftw3)
 endif()
 
-# Include audio_transport library
+# Build audio_transport from source as a static library and link it into the
+# plugin, so the installed bundle doesn't depend on a dylib in ../build (and
+# the plugin build always picks up library changes without a separate build).
 set(AUDIO_TRANSPORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
-include_directories(${AUDIO_TRANSPORT_DIR}/include)
-link_directories(${AUDIO_TRANSPORT_DIR}/build)
+file(GLOB AUDIO_TRANSPORT_SOURCES CONFIGURE_DEPENDS ${AUDIO_TRANSPORT_DIR}/src/*.cpp)
+add_library(audio_transport STATIC ${AUDIO_TRANSPORT_SOURCES})
+target_include_directories(audio_transport
+    PUBLIC ${AUDIO_TRANSPORT_DIR}/include
+    PRIVATE ${FFTW3_INCLUDE_DIRS})
+set_target_properties(audio_transport PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_options(audio_transport PRIVATE -O3)
 
 # Plugin settings
 juce_add_plugin(AudioTransportVST
