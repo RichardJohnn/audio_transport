@@ -2,6 +2,10 @@
 #include "PluginEditor.h"
 #include <cstring>
 #include <vector>
+#include <mutex>
+#include <chrono>
+
+namespace { std::mutex fftwPlannerMutex; }
 
 //==============================================================================
 AudioTransportProcessor::AudioTransportProcessor()
@@ -81,10 +85,17 @@ AudioTransportProcessor::AudioTransportProcessor()
         0,  // Default to 2x
         "FFT zero-padding multiplier (higher = smoother spectrum but more CPU)"
     ));
+    builder = std::thread([this] { buildLoop(); });
 }
 
 AudioTransportProcessor::~AudioTransportProcessor()
 {
+    stopping.store(true);
+    builder.join();
+    std::lock_guard<std::mutex> lock(fftwPlannerMutex);
+    delete pending.exchange(nullptr);
+    delete retired.exchange(nullptr);
+    delete active;
 }
 
 //==============================================================================
@@ -156,100 +167,113 @@ void AudioTransportProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 {
     juce::ignoreUnused(samplesPerBlock);
 
-    currentSampleRate = sampleRate;
-    rebuildProcessor();
+    requestedSampleRate.store(sampleRate);
+    ++prepareGeneration;
+    requestProcessor();
 
-    // Report latency to host
-    setLatencySamples(getLatencySamples());
-
-    // Initialize delay buffers
-    updateDelayBuffers();
-}
-
-void AudioTransportProcessor::rebuildProcessor()
-{
-    double windowSize = windowSizeParam->get();
-
-    // Convert hop divisor choice to actual value (2, 4, 8, 16)
-    int hopDivisorIndex = hopDivisorParam->getIndex();
-    int hopDivisor = (hopDivisorIndex == 0) ? 2 :
-                     (hopDivisorIndex == 1) ? 4 :
-                     (hopDivisorIndex == 2) ? 8 : 16;
-
-    // Convert FFT multiplier choice to actual value (2, 4, 8, 16, 32, 64, 128)
-    int fftMultIndex = fftMultiplierParam->getIndex();
-    int fftMult = 2 << fftMultIndex;  // 2^(index+1)
-
-    // Build both processors with user-selected parameters
-    cdfProcessor = std::make_unique<audio_transport::RealtimeAudioTransport>(
-        currentSampleRate,
-        windowSize,
-        hopDivisor,
-        fftMult
-    );
-
-    reassignmentProcessor = std::make_unique<audio_transport::RealtimeReassignmentTransport>(
-        currentSampleRate,
-        windowSize,
-        hopDivisor,
-        fftMult
-    );
-
-    needsProcessorRebuild = false;
-
-    // Update latency reporting (use current algorithm's latency)
-    setLatencySamples(getLatencySamples());
-
-    // Update delay buffers to match new latency
-    updateDelayBuffers();
-}
-
-void AudioTransportProcessor::updateDelayBuffers()
-{
-    // Get the current latency
-    int latency = getLatencySamples();
-
-    if (latency < 1)
-        latency = 1;  // Minimum buffer size
-
-    if (latency != delayBufferSize)
+    // Hosts read latency after prepareToPlay and may ignore changes made during
+    // playback, so report it now instead of waiting for the background build.
+    // Both formulas are plain arithmetic; they must match each class's
+    // getLatencySamples().
+    const double windowMs = windowSizeParam->get();
+    int latency = 0;
+    if (algorithmParam->getIndex() == 1)
     {
-        delayBufferSize = latency;
-        // Buffer size exactly matches latency for circular buffer
-        mainDelayBuffer.resize(delayBufferSize, 0.0f);
-        sidechainDelayBuffer.resize(delayBufferSize, 0.0f);
-        delayBufferWritePos = 0;
+        const int hopDiv = 2 << hopDivisorParam->getIndex();
+        const int fftMult = 2 << fftMultiplierParam->getIndex();
+        latency = static_cast<int>(audio_transport::spectral::stft_params::from_python(
+            sampleRate, windowMs, static_cast<unsigned int>(hopDiv),
+            static_cast<unsigned int>(fftMult)).window);
+    }
+    else
+    {
+        latency = static_cast<int>(windowMs * sampleRate / 1000.0) / 2;
+    }
+    latency = std::max(1, latency);
+    reportedLatency.store(latency);
+    setLatencySamples(latency);
+}
 
-        // Clear buffers
-        std::fill(mainDelayBuffer.begin(), mainDelayBuffer.end(), 0.0f);
-        std::fill(sidechainDelayBuffer.begin(), sidechainDelayBuffer.end(), 0.0f);
+void AudioTransportProcessor::requestProcessor()
+{
+    lastWindowSize = windowSizeParam->get();
+    lastAlgorithm = algorithmParam->getIndex();
+    lastHopDivisor = hopDivisorParam->getIndex();
+    lastFftMult = fftMultiplierParam->getIndex();
+    // All exposed geometry choices are integral. Publish one coherent snapshot.
+    // The prepare generation also forces a fresh state on each playback setup;
+    // sample rate is kept separately to preserve non-integral rates.
+    const uint64_t key = (prepareGeneration & ((1ULL << 20) - 1))
+        | (static_cast<uint64_t>(lastWindowSize) << 20)
+        | (static_cast<uint64_t>(lastHopDivisor) << 29)
+        | (static_cast<uint64_t>(lastFftMult) << 31)
+        | (static_cast<uint64_t>(lastAlgorithm) << 34);
+    requestedKey.store(key);
+}
+
+void AudioTransportProcessor::buildLoop()
+{
+    uint64_t builtKey = 0;
+    while (!stopping.load())
+    {
+        {
+            // FFTW planner and plan destruction are serialized across plugin instances.
+            std::lock_guard<std::mutex> lock(fftwPlannerMutex);
+            delete retired.exchange(nullptr);
+        }
+        const auto key = requestedKey.load();
+        if (key != 0 && key != builtKey)
+        {
+            std::lock_guard<std::mutex> lock(fftwPlannerMutex);
+            std::unique_ptr<ProcessorState> next(new ProcessorState);
+            next->key = key;
+            const double rate = requestedSampleRate.load();
+            const double window = (key >> 20) & 511;
+            const int hop = 2 << ((key >> 29) & 3);
+            const int fft = 2 << ((key >> 31) & 7);
+            try
+            {
+                if ((key >> 34) & 1)
+                {
+                    next->reassignmentProcessor.reset(new audio_transport::RealtimeReassignmentTransport(rate, window, hop, fft));
+                    next->delayBufferSize = next->reassignmentProcessor->getLatencySamples();
+                }
+                else
+                {
+                    next->cdfProcessor.reset(new audio_transport::RealtimeAudioTransport(rate, window, hop, fft));
+                    next->delayBufferSize = next->cdfProcessor->getLatencySamples();
+                }
+                next->delayBufferSize = std::max(1, next->delayBufferSize);
+                next->mainDelayBuffer.assign(next->delayBufferSize, 0.0f);
+                next->sidechainDelayBuffer.assign(next->delayBufferSize, 0.0f);
+                if (requestedKey.load() == key && !stopping.load())
+                    delete pending.exchange(next.release());
+            }
+            catch (const std::exception&)
+            {
+                // Keep output silent until a new valid configuration is requested.
+            }
+            builtKey = key;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
 void AudioTransportProcessor::releaseResources()
 {
-    if (cdfProcessor)
-        cdfProcessor->reset();
-    if (reassignmentProcessor)
-        reassignmentProcessor->reset();
-
-    // Clear delay buffers
-    std::fill(mainDelayBuffer.begin(), mainDelayBuffer.end(), 0.0f);
-    std::fill(sidechainDelayBuffer.begin(), sidechainDelayBuffer.end(), 0.0f);
-    delayBufferWritePos = 0;
+    if (active)
+    {
+        if (active->cdfProcessor) active->cdfProcessor->reset();
+        if (active->reassignmentProcessor) active->reassignmentProcessor->reset();
+        std::fill(active->mainDelayBuffer.begin(), active->mainDelayBuffer.end(), 0.0f);
+        std::fill(active->sidechainDelayBuffer.begin(), active->sidechainDelayBuffer.end(), 0.0f);
+        active->delayBufferWritePos = 0;
+    }
 }
 
 int AudioTransportProcessor::getLatencySamples() const
 {
-    // Return latency based on current algorithm selection
-    int algorithmIndex = algorithmParam->getIndex();
-
-    if (algorithmIndex == 0 && cdfProcessor)
-        return cdfProcessor->getLatencySamples();
-    else if (algorithmIndex == 1 && reassignmentProcessor)
-        return reassignmentProcessor->getLatencySamples();
-
-    return 0;
+    return reportedLatency.load();
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -279,40 +303,34 @@ void AudioTransportProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused(midiMessages);
     juce::ScopedNoDenormals noDenormals;
 
-    // Check if window size, algorithm, or spectral parameters changed
-    static float lastWindowSize = windowSizeParam->get();
-    static int lastAlgorithm = algorithmParam->getIndex();
-    static int lastHopDivisor = hopDivisorParam->getIndex();
-    static int lastFftMult = fftMultiplierParam->getIndex();
+    if (windowSizeParam->get() != lastWindowSize
+        || algorithmParam->getIndex() != lastAlgorithm
+        || hopDivisorParam->getIndex() != lastHopDivisor
+        || fftMultiplierParam->getIndex() != lastFftMult)
+        requestProcessor();
 
-    if (std::abs(windowSizeParam->get() - lastWindowSize) > 0.5f)
+    // The single retirement slot prevents destruction on the audio thread.
+    if (retired.load() == nullptr)
     {
-        lastWindowSize = windowSizeParam->get();
-        needsProcessorRebuild = true;
+        if (auto* next = pending.exchange(nullptr))
+        {
+            if (next->key == requestedKey.load())
+            {
+                auto* old = active;
+                active = next;
+                retired.store(old);
+                reportedLatency.store(active->delayBufferSize);
+                setLatencySamples(active->delayBufferSize);
+            }
+            else
+                retired.store(next);
+        }
     }
-
-    if (hopDivisorParam->getIndex() != lastHopDivisor)
+    if (!active || active->key != requestedKey.load())
     {
-        lastHopDivisor = hopDivisorParam->getIndex();
-        needsProcessorRebuild = true;
+        buffer.clear();
+        return;
     }
-
-    if (fftMultiplierParam->getIndex() != lastFftMult)
-    {
-        lastFftMult = fftMultiplierParam->getIndex();
-        needsProcessorRebuild = true;
-    }
-
-    if (algorithmParam->getIndex() != lastAlgorithm)
-    {
-        lastAlgorithm = algorithmParam->getIndex();
-        // When algorithm changes, update latency and delay buffers
-        setLatencySamples(getLatencySamples());
-        updateDelayBuffers();
-    }
-
-    if (needsProcessorRebuild)
-        rebuildProcessor();
 
     // Get main input/output buffer
     auto totalNumInputChannels  = getTotalNumInputChannels();
@@ -350,22 +368,22 @@ void AudioTransportProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     std::vector<float> dryMain(numSamples);
     std::vector<float> drySidechain(numSamples);
 
-    if (delayBufferSize > 0)
+    if (active->delayBufferSize > 0)
     {
         // Process delay buffers sample-by-sample
         for (int i = 0; i < numSamples; ++i)
         {
             // For circular buffer: read the oldest sample (at current write position)
             // then write the new sample, overwriting the old one
-            dryMain[i] = mainDelayBuffer[delayBufferWritePos];
-            drySidechain[i] = sidechainDelayBuffer[delayBufferWritePos];
+            dryMain[i] = active->mainDelayBuffer[active->delayBufferWritePos];
+            drySidechain[i] = active->sidechainDelayBuffer[active->delayBufferWritePos];
 
             // Write new samples
-            mainDelayBuffer[delayBufferWritePos] = mainInput[i];
-            sidechainDelayBuffer[delayBufferWritePos] = sidechainInput[i];
+            active->mainDelayBuffer[active->delayBufferWritePos] = mainInput[i];
+            active->sidechainDelayBuffer[active->delayBufferWritePos] = sidechainInput[i];
 
             // Advance position (circular)
-            delayBufferWritePos = (delayBufferWritePos + 1) % delayBufferSize;
+            active->delayBufferWritePos = (active->delayBufferWritePos + 1) % active->delayBufferSize;
         }
     }
     else
@@ -455,8 +473,8 @@ void AudioTransportProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // Process with optimal transport (using potentially swapped inputs)
     int algorithmIndex = algorithmParam->getIndex();
-    bool hasProcessor = (algorithmIndex == 0 && cdfProcessor) ||
-                        (algorithmIndex == 1 && reassignmentProcessor);
+    bool hasProcessor = (algorithmIndex == 0 && active->cdfProcessor) ||
+                        (algorithmIndex == 1 && active->reassignmentProcessor);
 
     if (hasProcessor && morphedBlend > 0.001f)
     {
@@ -469,7 +487,7 @@ void AudioTransportProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         // Use selected algorithm
         if (algorithmIndex == 0)
         {
-            cdfProcessor->process(
+            active->cdfProcessor->process(
                 tempMain.data(),
                 tempSidechain.data(),
                 mainInput,  // Output to main buffer
@@ -479,7 +497,7 @@ void AudioTransportProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
         else
         {
-            reassignmentProcessor->process(
+            active->reassignmentProcessor->process(
                 tempMain.data(),
                 tempSidechain.data(),
                 mainInput,  // Output to main buffer
@@ -580,7 +598,7 @@ void AudioTransportProcessor::setStateInformation (const void* data, int sizeInB
             fftMultiplierParam->setValueNotifyingHost(stream.readInt() / (float)(fftMultiplierParam->choices.size() - 1));
     }
 
-    needsProcessorRebuild = true;
+    // Geometry changes are observed at the next audio block.
 }
 
 //==============================================================================

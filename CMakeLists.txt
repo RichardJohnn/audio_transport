@@ -93,11 +93,14 @@ if (BUILD_TESTS)
   add_executable(test_realtime_transport test/test_realtime_transport.cpp)
   target_link_libraries(test_realtime_transport ${PROJECT_NAME} ${FFTW_LIBRARIES})
 
+  add_executable(test_realtime_reassignment test/test_realtime_reassignment.cpp)
+  target_link_libraries(test_realtime_reassignment ${PROJECT_NAME} ${FFTW_LIBRARIES})
+
   # Add other standalone tests
   file(GLOB TEST_SOURCES test/test_*.cpp)
   foreach(_test_file ${TEST_SOURCES})
       get_filename_component(_test_name ${_test_file} NAME_WE)
-      if(NOT _test_name STREQUAL "test_realtime_transport")
+      if(NOT _test_name STREQUAL "test_realtime_transport" AND NOT _test_name STREQUAL "test_realtime_reassignment")
           add_executable(${_test_name} ${_test_file})
           target_link_libraries(${_test_name} ${PROJECT_NAME} ${FFTW_LIBRARIES})
       endif()

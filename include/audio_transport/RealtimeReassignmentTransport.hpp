@@ -27,13 +27,13 @@ public:
      * @param sample_rate Audio sample rate in Hz
      * @param window_ms Window size in milliseconds
      * @param hop_divisor Hop divisor (4 = 75% overlap, 2 = 50% overlap)
-     * @param fft_padding FFT padding multiplier (2 = 2x padding)
+     * @param fft_mult Multiplier of nextpow2(window samples) for FFT length
      */
     RealtimeReassignmentTransport(
         double sample_rate,
         double window_ms,
         int hop_divisor = 4,
-        int fft_padding = 2
+        int fft_mult = 2
     );
 
     ~RealtimeReassignmentTransport();
@@ -64,60 +64,21 @@ public:
      */
     void reset();
 
+    int getHopSize() const { return static_cast<int>(params_.hop); }
+    int getFFTSize() const { return static_cast<int>(params_.fft_size); }
+    int getWindowSize() const { return static_cast<int>(params_.window); }
+
 private:
-    // Audio parameters
     double sample_rate_;
-    double window_size_; // in seconds
-    int window_samples_;
-    int window_padded_;
-    int hop_size_;
-    int hop_divisor_;
-    int fft_padding_;
-    int fft_size_;
-
-    // Input buffers (accumulate samples until we have a full hop)
-    std::vector<float> main_buffer_;
-    std::vector<float> sidechain_buffer_;
-    int input_write_pos_;
-
-    // Output buffer (stores processed samples waiting to be output)
-    std::vector<float> output_buffer_;
-    int output_read_pos_;
-
-    // Spectral analysis windows
-    std::vector<double> window_;
-    std::vector<double> window_t_;
-    std::vector<double> window_d_;
-
-    // FFT plans
-    fftw_plan fft_plan_;
-    fftw_plan fft_plan_t_;
-    fftw_plan fft_plan_d_;
-    fftw_plan ifft_plan_;
-
-    // FFT buffers
-    fftw_complex* fft_;
-    fftw_complex* fft_t_;
-    fftw_complex* fft_d_;
-    fftw_complex* ifft_;
-
-    // Phase continuity tracking
+    spectral::stft_params params_;
+    spectral::analyzer analyzer_;
+    spectral::synthesizer synthesizer_;
+    std::vector<double> main_buffer_, sidechain_buffer_, overlap_buffer_;
     std::vector<double> phases_;
-
-    // Overlap-add state
-    std::vector<double> overlap_buffer_;
-
-    // Helper methods
-    void analyzeWindow(
-        const float* input,
-        std::vector<spectral::point>& spectrum
-    );
-
-    void synthesizeWindow(
-        const std::vector<spectral::point>& spectrum,
-        float* output
-    );
-
+    size_t input_pos_ = 0;
+    size_t ready_pos_ = 0;
+    size_t ready_count_ = 0;
+    size_t frame_index_ = 0;
     void processHop(float k);
 };
 

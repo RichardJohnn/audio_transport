@@ -117,11 +117,12 @@ For a hop other than half the window, pass a `spectral::stft_params` to `analysi
 - Seed the phases with `initial_phases(first_spectrum, hop_seconds)` rather than zeros; zeros line every partial up in the first window and synthesize a click.
 - `spectral::analyzer` / `spectral::synthesizer` process one window at a time with FFTW plans created once. Planning isn't thread-safe: construct them on one thread, then use separate instances concurrently (`transport -f` runs one per channel).
 - `equal_loudness` holds the A-weighting curve flat below 20 Hz; otherwise `remove()` multiplies near-DC bins by up to ~1e15 at fine FFT resolutions.
-- `spectral.cpp` plans with `FFTW_ESTIMATE` (instant, reproducible). `cmake -D FFTW_MEASURE=ON` switches to `FFTW_MEASURE`, whose planning (~15 s for a 1M-point FFT) outweighs its faster transforms in a single render, and whose output can differ in the last bits between runs. The realtime classes keep `FFTW_MEASURE` since they reuse plans for the life of a stream.
+- `spectral.cpp` plans with `FFTW_ESTIMATE` (instant, reproducible). `cmake -D FFTW_MEASURE=ON` switches to `FFTW_MEASURE`, whose planning (~15 s for a 1M-point FFT) outweighs its faster transforms in a single render, and whose output can differ in the last bits between runs. `RealtimeAudioTransport` (CDF) keeps `FFTW_MEASURE` since it reuses plans for the life of a stream. `RealtimeReassignmentTransport` uses `analyzer`/`synthesizer`, so it follows the `spectral.cpp` setting and shares `stft_params::from_python` sizing (hop = N/hop_div, fft = nextpow2(N)·fft_mult) with `transport -f`. It applies no equal-loudness weighting, so its output still differs from `transport -f` at the same parameters.
+- The plugin builds processors on a background thread and swaps them in on the audio thread. Its `prepareToPlay` latency formulas must match each class's `getLatencySamples()`.
 
 ## Tests
 
 ```bash
-cmake .. -D BUILD_TESTS=ON && make && ./test_stft_params && ./test_transport_params && ./test_equal_loudness
+cmake .. -D BUILD_TESTS=ON && make && ./test_stft_params && ./test_transport_params && ./test_equal_loudness && ./test_realtime_reassignment
 ```
 On macOS with Homebrew, configure as `rebuild.sh` does (`-DCMAKE_PREFIX_PATH="$(brew --prefix fftw);/usr/local"`) so the examples pick up the ffmpeg@4 headers audiorw needs.

@@ -1,6 +1,6 @@
 # Audio Transport VST3 - Version History
 
-## v1.3.0 (Current) - 2024-02-11
+## v1.3.0 (Current) - 2026-11-13
 
 ### New Features
 - **Extreme parameter ranges for experimentation**:
@@ -19,8 +19,15 @@
 
 ### Technical
 - Both algorithms (CDF and Reassignment) support full parameter range
-- Processor rebuilds when spectral parameters change
+- Processor rebuilds when spectral parameters change, on a background thread, and is swapped in on the audio thread
+- Reassignment algorithm now uses the same STFT sizing as the offline `transport -f` (hop = N/hop_div, FFT = nextpow2(N)·fft_mult)
 - Latency automatically updates and compensates for extreme settings
+
+### Known limitations
+- Reassignment output does not match `transport -f` at the same parameters: the realtime path applies no equal-loudness weighting, while `-f` does. Parameter meanings (hop and FFT size) do match.
+- Extreme settings (e.g. 500 ms / 128x) cannot play live: each hop runs several FFTs of millions of points inside one audio callback, so playback drops out regardless of reported latency. Use moderate settings live and an offline bounce for extreme ones.
+- Changing window, overlap, FFT size or algorithm builds a new processor (allocating buffers and planning FFTs, not recompiling) on a background thread. The plugin outputs silence, including the dry signal, until it is ready, and the reported latency changes. With CDF at large FFT sizes this can take seconds, so switching algorithms is no longer an instant A/B comparison.
+- Not yet tested in a DAW.
 
 ---
 

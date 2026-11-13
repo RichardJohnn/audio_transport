@@ -4,6 +4,9 @@
 #include <audio_transport/RealtimeAudioTransport.hpp>
 #include <audio_transport/RealtimeReassignmentTransport.hpp>
 #include <memory>
+#include <atomic>
+#include <thread>
+#include <cstdint>
 
 //==============================================================================
 /**
@@ -67,9 +70,22 @@ public:
 
 private:
     //==============================================================================
-    // Audio Transport processors (CDF-based and Reassignment-based)
-    std::unique_ptr<audio_transport::RealtimeAudioTransport> cdfProcessor;
-    std::unique_ptr<audio_transport::RealtimeReassignmentTransport> reassignmentProcessor;
+    struct ProcessorState {
+        uint64_t key = 0;
+        std::unique_ptr<audio_transport::RealtimeAudioTransport> cdfProcessor;
+        std::unique_ptr<audio_transport::RealtimeReassignmentTransport> reassignmentProcessor;
+        std::vector<float> mainDelayBuffer, sidechainDelayBuffer;
+        int delayBufferWritePos = 0;
+        int delayBufferSize = 0;
+    };
+    ProcessorState* active = nullptr; // Owned exclusively by the audio thread until retired.
+    std::atomic<ProcessorState*> pending { nullptr }, retired { nullptr };
+    std::atomic<uint64_t> requestedKey { 0 };
+    std::atomic<int> reportedLatency { 0 };
+    std::atomic<bool> stopping { false };
+    std::thread builder;
+    void buildLoop();
+    void requestProcessor();
 
     // Parameters
     juce::AudioParameterFloat* morphParam;
@@ -82,18 +98,10 @@ private:
     juce::AudioParameterChoice* fftMultiplierParam;
 
     // State
-    double currentSampleRate = 44100.0;
-    bool needsProcessorRebuild = false;
-
-    // Delay buffers for latency compensation of dry signals
-    std::vector<float> mainDelayBuffer;
-    std::vector<float> sidechainDelayBuffer;
-    int delayBufferWritePos = 0;
-    int delayBufferSize = 0;
-
-    // Helper methods
-    void rebuildProcessor();
-    void updateDelayBuffers();
+    std::atomic<double> requestedSampleRate { 44100.0 };
+    uint64_t prepareGeneration = 0;
+    float lastWindowSize = -1.0f;
+    int lastAlgorithm = -1, lastHopDivisor = -1, lastFftMult = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioTransportProcessor)
 };
