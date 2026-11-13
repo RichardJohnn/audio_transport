@@ -7,7 +7,7 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
       audioProcessor (p)
 {
     // Set window size (taller to accommodate new controls)
-    setSize (500, 490);
+    setSize (500, 570);
 
     // Title
     titleLabel.setText("Audio Transport", juce::dontSendNotification);
@@ -48,10 +48,11 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
 
     // Window size slider
     windowSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    windowSizeSlider.setRange(20.0, 200.0, 1.0);
+    windowSizeSlider.setRange(1.0, 500.0, 1.0);
     windowSizeSlider.setValue(p.getWindowSizeParameter()->get());
     windowSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
     windowSizeSlider.setTextValueSuffix(" ms");
+    windowSizeSlider.setSkewFactor(0.5);  // Logarithmic scale for better control
     windowSizeSlider.onValueChange = [this] {
         audioProcessor.getWindowSizeParameter()->setValueNotifyingHost(
             static_cast<float>(windowSizeSlider.getValue())
@@ -108,8 +109,8 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
     addAndMakeVisible(dryWetLabel);
 
     // Algorithm combo box
-    algorithmCombo.addItem("CDF (Fast)", 1);
-    algorithmCombo.addItem("Reassignment (Quality)", 2);
+    algorithmCombo.addItem("CDF (Clean)", 1);
+    algorithmCombo.addItem("Reassignment (Glitchy)", 2);
     algorithmCombo.setSelectedItemIndex(p.getAlgorithmParameter()->getIndex(), juce::dontSendNotification);
     algorithmCombo.onChange = [this] {
         int index = algorithmCombo.getSelectedItemIndex();
@@ -122,6 +123,45 @@ AudioTransportEditor::AudioTransportEditor (AudioTransportProcessor& p)
     algorithmLabel.setFont(juce::Font(14.0f));
     algorithmLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(algorithmLabel);
+
+    // Hop Divisor combo box
+    hopDivisorCombo.addItem("50% Overlap", 1);
+    hopDivisorCombo.addItem("75% Overlap", 2);
+    hopDivisorCombo.addItem("87.5% Overlap", 3);
+    hopDivisorCombo.addItem("93.75% Overlap", 4);
+    hopDivisorCombo.setSelectedItemIndex(p.getHopDivisorParameter()->getIndex(), juce::dontSendNotification);
+    hopDivisorCombo.onChange = [this] {
+        int index = hopDivisorCombo.getSelectedItemIndex();
+        float normalizedValue = static_cast<float>(index) / static_cast<float>(hopDivisorCombo.getNumItems() - 1);
+        audioProcessor.getHopDivisorParameter()->setValueNotifyingHost(normalizedValue);
+    };
+    addAndMakeVisible(hopDivisorCombo);
+
+    hopDivisorLabel.setText("Overlap", juce::dontSendNotification);
+    hopDivisorLabel.setFont(juce::Font(14.0f));
+    hopDivisorLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(hopDivisorLabel);
+
+    // FFT Multiplier combo box
+    fftMultiplierCombo.addItem("2x FFT", 1);
+    fftMultiplierCombo.addItem("4x FFT", 2);
+    fftMultiplierCombo.addItem("8x FFT", 3);
+    fftMultiplierCombo.addItem("16x FFT", 4);
+    fftMultiplierCombo.addItem("32x FFT", 5);
+    fftMultiplierCombo.addItem("64x FFT", 6);
+    fftMultiplierCombo.addItem("128x FFT", 7);
+    fftMultiplierCombo.setSelectedItemIndex(p.getFftMultiplierParameter()->getIndex(), juce::dontSendNotification);
+    fftMultiplierCombo.onChange = [this] {
+        int index = fftMultiplierCombo.getSelectedItemIndex();
+        float normalizedValue = static_cast<float>(index) / static_cast<float>(fftMultiplierCombo.getNumItems() - 1);
+        audioProcessor.getFftMultiplierParameter()->setValueNotifyingHost(normalizedValue);
+    };
+    addAndMakeVisible(fftMultiplierCombo);
+
+    fftMultiplierLabel.setText("FFT Size", juce::dontSendNotification);
+    fftMultiplierLabel.setFont(juce::Font(14.0f));
+    fftMultiplierLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(fftMultiplierLabel);
 
     // Latency label
     latencyLabel.setFont(juce::Font(12.0f));
@@ -169,7 +209,7 @@ void AudioTransportEditor::paint (juce::Graphics& g)
 
     // Algorithm info
     juce::String algoText = audioProcessor.getAlgorithmParameter()->getIndex() == 0 ?
-        "Algorithm: CDF (Fast)" : "Algorithm: Reassignment (Quality - more CPU)";
+        "Algorithm: CDF (Clean)" : "Algorithm: Reassignment (Glitchy - more CPU)";
     g.setFont(9.0f);
     g.drawText(algoText, getLocalBounds().reduced(10).removeFromBottom(60).removeFromTop(15),
                juce::Justification::centred);
@@ -198,6 +238,20 @@ void AudioTransportEditor::resized()
     auto algorithmArea = bounds.removeFromTop(30);
     algorithmLabel.setBounds(algorithmArea.removeFromLeft(120));
     algorithmCombo.setBounds(algorithmArea);
+
+    bounds.removeFromTop(10); // Spacing
+
+    // Hop Divisor combo box
+    auto hopDivisorArea = bounds.removeFromTop(30);
+    hopDivisorLabel.setBounds(hopDivisorArea.removeFromLeft(120));
+    hopDivisorCombo.setBounds(hopDivisorArea);
+
+    bounds.removeFromTop(10); // Spacing
+
+    // FFT Multiplier combo box
+    auto fftMultiplierArea = bounds.removeFromTop(30);
+    fftMultiplierLabel.setBounds(fftMultiplierArea.removeFromLeft(120));
+    fftMultiplierCombo.setBounds(fftMultiplierArea);
 
     bounds.removeFromTop(10); // Spacing
 
@@ -274,4 +328,12 @@ void AudioTransportEditor::timerCallback()
     int algoIndex = audioProcessor.getAlgorithmParameter()->getIndex();
     if (algorithmCombo.getSelectedItemIndex() != algoIndex)
         algorithmCombo.setSelectedItemIndex(algoIndex, juce::dontSendNotification);
+
+    int hopIndex = audioProcessor.getHopDivisorParameter()->getIndex();
+    if (hopDivisorCombo.getSelectedItemIndex() != hopIndex)
+        hopDivisorCombo.setSelectedItemIndex(hopIndex, juce::dontSendNotification);
+
+    int fftIndex = audioProcessor.getFftMultiplierParameter()->getIndex();
+    if (fftMultiplierCombo.getSelectedItemIndex() != fftIndex)
+        fftMultiplierCombo.setSelectedItemIndex(fftIndex, juce::dontSendNotification);
 }

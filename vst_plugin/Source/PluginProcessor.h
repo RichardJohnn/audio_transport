@@ -59,6 +59,8 @@ public:
     juce::AudioParameterChoice* getMorphModeParameter() const { return morphModeParam; }
     juce::AudioParameterFloat* getDryWetParameter() const { return dryWetParam; }
     juce::AudioParameterChoice* getAlgorithmParameter() const { return algorithmParam; }
+    juce::AudioParameterChoice* getHopDivisorParameter() const { return hopDivisorParam; }
+    juce::AudioParameterChoice* getFftMultiplierParameter() const { return fftMultiplierParam; }
 
     // Latency reporting
     int getLatencySamples() const;
@@ -76,6 +78,8 @@ private:
     juce::AudioParameterChoice* morphModeParam;
     juce::AudioParameterFloat* dryWetParam;
     juce::AudioParameterChoice* algorithmParam;
+    juce::AudioParameterChoice* hopDivisorParam;
+    juce::AudioParameterChoice* fftMultiplierParam;
 
     // State
     double currentSampleRate = 44100.0;

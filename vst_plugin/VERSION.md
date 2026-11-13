@@ -1,14 +1,39 @@
 # Audio Transport VST3 - Version History
 
-## v1.2.0 (Current) - 2024-02-11
+## v1.3.0 (Current) - 2024-02-11
+
+### New Features
+- **Extreme parameter ranges for experimentation**:
+  - **Window Size**: Expanded from 20-200ms to **1ms-500ms**
+    - 1ms = extreme glitch effects
+    - 500ms = ultra-smooth spectral morphing (matches original offline algorithm)
+  - **Overlap control**: Choose 50%, 75%, 87.5%, or 93.75% window overlap
+    - Higher overlap = smoother but more latency and CPU
+  - **FFT Size multiplier**: 2x, 4x, 8x, 16x, 32x, 64x, or **128x** zero-padding
+    - Higher = smoother spectral interpolation (original offline used 128x)
+    - Can create multi-second latencies at extreme settings
+- **Philosophy shift**: Plugin optimized for fast experimentation rather than live performance
+  - Latency can reach several seconds at extreme settings, but still faster than CLI workflow
+  - All parameters properly tracked and reported to DAW
+  - Window size slider uses logarithmic scale for better control across huge range
+
+### Technical
+- Both algorithms (CDF and Reassignment) support full parameter range
+- Processor rebuilds when spectral parameters change
+- Latency automatically updates and compensates for extreme settings
+
+---
+
+## v1.2.0 - 2024-02-11
 
 ### New Features
 - **Algorithm selector**: Choose between two optimal transport algorithms
-  - **CDF (Fast)**: Simple CDF-based optimal transport - faster, lower CPU usage
-  - **Reassignment (Quality)**: Spectral reassignment-based algorithm - potentially better sound quality, higher CPU usage
-  - Implements the Henderson & Solomon (DAFx 2019) algorithm with reassigned spectrograms
+  - **CDF (Clean)**: Simple CDF-based optimal transport - clean morphing, lower CPU usage
+  - **Reassignment (Glitchy)**: Spectral reassignment-based algorithm - creates interesting glitchy artifacts, higher CPU usage
+  - Reassignment mode implements Henderson & Solomon (DAFx 2019) algorithm with reassigned spectrograms
+  - Window size has dramatic effect on pitch/timbre in Reassignment mode
   - Both algorithms properly track and report latency to DAW
-  - Algorithms can be switched in real-time for A/B comparison
+  - Algorithms can be switched in real-time for creative A/B comparison
 
 ### Technical
 - Added `RealtimeReassignmentTransport` class for reassignment-based processing

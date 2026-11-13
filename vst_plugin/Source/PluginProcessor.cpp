@@ -30,9 +30,9 @@ AudioTransportProcessor::AudioTransportProcessor()
     addParameter(windowSizeParam = new juce::AudioParameterFloat(
         "windowSize",
         "Window Size",
-        juce::NormalisableRange<float>(20.0f, 200.0f, 1.0f),
+        juce::NormalisableRange<float>(1.0f, 500.0f, 1.0f),
         100.0f,
-        "Window size in milliseconds"
+        "Window size in milliseconds (1ms = glitchy, 500ms = smooth)"
     ));
 
     addParameter(bypassParam = new juce::AudioParameterBool(
@@ -61,9 +61,25 @@ AudioTransportProcessor::AudioTransportProcessor()
     addParameter(algorithmParam = new juce::AudioParameterChoice(
         "algorithm",
         "Algorithm",
-        juce::StringArray("CDF (Fast)", "Reassignment (Quality)"),
-        0,  // Default to CDF (faster)
+        juce::StringArray("CDF (Clean)", "Reassignment (Glitchy)"),
+        0,  // Default to CDF (clean)
         "Transport algorithm"
+    ));
+
+    addParameter(hopDivisorParam = new juce::AudioParameterChoice(
+        "hopDivisor",
+        "Overlap",
+        juce::StringArray("50% (2)", "75% (4)", "87.5% (8)", "93.75% (16)"),
+        1,  // Default to 75% (4)
+        "Window overlap amount (higher = smoother but more latency)"
+    ));
+
+    addParameter(fftMultiplierParam = new juce::AudioParameterChoice(
+        "fftMultiplier",
+        "FFT Size",
+        juce::StringArray("2x", "4x", "8x", "16x", "32x", "64x", "128x"),
+        0,  // Default to 2x
+        "FFT zero-padding multiplier (higher = smoother spectrum but more CPU)"
     ));
 }
 
@@ -154,19 +170,29 @@ void AudioTransportProcessor::rebuildProcessor()
 {
     double windowSize = windowSizeParam->get();
 
-    // Build both processors
+    // Convert hop divisor choice to actual value (2, 4, 8, 16)
+    int hopDivisorIndex = hopDivisorParam->getIndex();
+    int hopDivisor = (hopDivisorIndex == 0) ? 2 :
+                     (hopDivisorIndex == 1) ? 4 :
+                     (hopDivisorIndex == 2) ? 8 : 16;
+
+    // Convert FFT multiplier choice to actual value (2, 4, 8, 16, 32, 64, 128)
+    int fftMultIndex = fftMultiplierParam->getIndex();
+    int fftMult = 2 << fftMultIndex;  // 2^(index+1)
+
+    // Build both processors with user-selected parameters
     cdfProcessor = std::make_unique<audio_transport::RealtimeAudioTransport>(
         currentSampleRate,
         windowSize,
-        4,  // 75% overlap
-        2   // 2x FFT zero-padding
+        hopDivisor,
+        fftMult
     );
 
     reassignmentProcessor = std::make_unique<audio_transport::RealtimeReassignmentTransport>(
         currentSampleRate,
         windowSize,
-        4,  // 75% overlap
-        2   // 2x FFT zero-padding
+        hopDivisor,
+        fftMult
     );
 
     needsProcessorRebuild = false;
@@ -253,13 +279,27 @@ void AudioTransportProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused(midiMessages);
     juce::ScopedNoDenormals noDenormals;
 
-    // Check if window size or algorithm changed
+    // Check if window size, algorithm, or spectral parameters changed
     static float lastWindowSize = windowSizeParam->get();
     static int lastAlgorithm = algorithmParam->getIndex();
+    static int lastHopDivisor = hopDivisorParam->getIndex();
+    static int lastFftMult = fftMultiplierParam->getIndex();
 
     if (std::abs(windowSizeParam->get() - lastWindowSize) > 0.5f)
     {
         lastWindowSize = windowSizeParam->get();
+        needsProcessorRebuild = true;
+    }
+
+    if (hopDivisorParam->getIndex() != lastHopDivisor)
+    {
+        lastHopDivisor = hopDivisorParam->getIndex();
+        needsProcessorRebuild = true;
+    }
+
+    if (fftMultiplierParam->getIndex() != lastFftMult)
+    {
+        lastFftMult = fftMultiplierParam->getIndex();
         needsProcessorRebuild = true;
     }
 
@@ -509,6 +549,8 @@ void AudioTransportProcessor::getStateInformation (juce::MemoryBlock& destData)
     stream.writeInt(morphModeParam->getIndex());
     stream.writeFloat(dryWetParam->get());
     stream.writeInt(algorithmParam->getIndex());
+    stream.writeInt(hopDivisorParam->getIndex());
+    stream.writeInt(fftMultiplierParam->getIndex());
 }
 
 void AudioTransportProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -530,6 +572,12 @@ void AudioTransportProcessor::setStateInformation (const void* data, int sizeInB
 
         if (stream.getPosition() < sizeInBytes)
             algorithmParam->setValueNotifyingHost(stream.readInt() / (float)(algorithmParam->choices.size() - 1));
+
+        if (stream.getPosition() < sizeInBytes)
+            hopDivisorParam->setValueNotifyingHost(stream.readInt() / (float)(hopDivisorParam->choices.size() - 1));
+
+        if (stream.getPosition() < sizeInBytes)
+            fftMultiplierParam->setValueNotifyingHost(stream.readInt() / (float)(fftMultiplierParam->choices.size() - 1));
     }
 
     needsProcessorRebuild = true;

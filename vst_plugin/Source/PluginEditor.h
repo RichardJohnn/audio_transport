@@ -45,6 +45,12 @@ private:
     juce::ComboBox algorithmCombo;
     juce::Label algorithmLabel;
 
+    juce::ComboBox hopDivisorCombo;
+    juce::Label hopDivisorLabel;
+
+    juce::ComboBox fftMultiplierCombo;
+    juce::Label fftMultiplierLabel;
+
     juce::Label titleLabel;
     juce::Label versionLabel;
     juce::Label latencyLabel;
