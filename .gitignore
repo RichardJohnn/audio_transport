@@ -1,5 +1,6 @@
 *.wav
 *.txt
+!CMakeLists.txt
 *.pdf
 *.png
 build
